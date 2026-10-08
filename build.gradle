@@ -1,0 +1,11 @@
+// 根构建脚本
+buildscript {
+    repositories {
+        google()
+        mavenCentral()
+    }
+}
+
+plugins {
+    id 'com.android.application' version '8.1.4' apply false
+}

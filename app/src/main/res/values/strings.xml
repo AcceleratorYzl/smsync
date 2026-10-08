@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">短信同步</string>
+    <string name="btn_sync">读取并上传短信</string>
+    <string name="btn_perm">申请读取短信权限</string>
+    <string name="status">状态：未开始</string>
+    <string name="server_label">服务器地址</string>
+    <string name="server_hint">例如 http://192.168.1.100:8080</string>
+</resources>

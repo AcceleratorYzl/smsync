@@ -1,0 +1,23 @@
+# Git/IDE 临时
+.DS_Store
+*.swp
+.idea/
+*.iml
+
+# Gradle
+.gradle/
+app/build/
+build/
+
+# Android 构建中间产物（保留 APK 分发）
+app/build/outputs/
+!SmsSync.apk
+
+# 服务器运行时生成
+server/data/
+server/server.log
+server/server.err.log
+server/*.class
+
+# 本地开发配置（不含真实密钥可提交）
+local.properties
