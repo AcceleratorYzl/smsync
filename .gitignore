@@ -21,3 +21,7 @@ server/*.class
 
 # 本地开发配置（不含真实密钥可提交）
 local.properties
+
+# Agnes 上传的文件与缓存
+.agnes/uploads/
+.agnes/

@@ -17,13 +17,20 @@ import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.Executors;
+import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * 短信同步服务器（纯 JDK 实现，零依赖）
- *  - POST /upload       接收 App 上传的短信 JSON，按 id 去重合并进 data/sms_store.json
- *  - GET  /             托管网页 web/index.html
- *  - GET  /data         返回已存储的短信 JSON 供网页前端渲染
+ *  - POST /upload       接收 App 上传的短信 JSON，按 id 去重合并进 data/sms_store.json（需 X-Sms-Key 头）
+ *  - GET  /             托管网页 web/index.html（网页内置访问口令，口令校验在前端）
+ *  - GET  /data         返回已存储的短信 JSON 供网页前端渲染（需 ?token= 访问口令，前端携带）
  *  - GET  /data?keyword=xxx   按关键字过滤
+ *  - POST /command      网页点「立即上传」时写入一条待执行指令（需 token）
+ *  - GET  /command      App 轮询：取出并消费待执行指令（需 X-Sms-Key）
+ *
+ * 安全：
+ *  - 共享密钥 X-Sms-Key（默认 SmsSync#2026#）保护 /upload 与 /command(GET)
+ *  - 网页访问口令 SMSYNC_VIEW（默认 smsync2026）保护 /data
  */
 public class SmsServer {
 
@@ -32,6 +39,16 @@ public class SmsServer {
     private static final Path DATA_FILE = DATA_DIR.resolve("sms_store.json");
     private static final Path WEB_DIR = Paths.get("web");
     private static final DateTimeFormatter FMT = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
+
+    /** 共享密钥：App 上传 / 轮询指令时携带在 X-Sms-Key 头 */
+    private static final String SHARE_KEY = "SmsSync#2026#";
+    /** 网页访问口令：前端调 /data、/command(POST) 时通过查询参数 token 携带 */
+    private static final String VIEW_TOKEN = "smsync2026";
+
+    /** 待执行指令队列（网页 POST /command 写入，App GET /command 取出） */
+    private static final Object CMD_LOCK = new Object();
+    private static final List<String> CMD_QUEUE = new ArrayList<>();
+    private static final AtomicLong CMD_SEQ = new AtomicLong(0);
 
     public static void main(String[] args) {
         try {
@@ -56,13 +73,16 @@ public class SmsServer {
         server.setExecutor(Executors.newFixedThreadPool(8));
         server.createContext("/upload", new UploadHandler());
         server.createContext("/data", new DataHandler());
+        server.createContext("/command", new CommandHandler());
         server.createContext("/", new WebHandler());
         server.start();
 
         String lanIp = getLanIp();
         System.out.println("===================================================");
         System.out.println(" 短信同步服务器已启动");
-        System.out.println(" 本机访问:   http://localhost:" + PORT + "/");
+        System.out.println(" 共享密钥 X-Sms-Key : " + SHARE_KEY);
+        System.out.println(" 网页访问口令 token   : " + VIEW_TOKEN);
+        System.out.println(" 本机访问:   http://localhost:" + PORT + "/  (token=" + VIEW_TOKEN + ")");
         System.out.println(" 局域网访问: http://" + lanIp + ":" + PORT + "/");
         System.out.println(" App 上传到: http://" + lanIp + ":" + PORT + "/upload");
         System.out.println(" 数据文件:   " + DATA_FILE.toAbsolutePath());
@@ -70,18 +90,34 @@ public class SmsServer {
         System.out.println("===================================================");
     }
 
+    // ---------- 权限校验 ----------
+    private static boolean keyOk(HttpExchange ex) {
+        String k = ex.getRequestHeaders().getFirst("X-Sms-Key");
+        return SHARE_KEY.equals(k);
+    }
+    private static boolean tokenOk(HttpExchange ex) {
+        String q = ex.getRequestURI().getQuery();
+        if (q != null && q.startsWith("token=")) {
+            int end = q.indexOf('&', 6);
+            String tok = end < 0 ? q.substring(6) : q.substring(6, end);
+            return VIEW_TOKEN.equals(tok);
+        }
+        // 也允许通过 X-View-Token 头携带
+        String h = ex.getRequestHeaders().getFirst("X-View-Token");
+        return VIEW_TOKEN.equals(h);
+    }
+
     // ---------- POST /upload ----------
     static class UploadHandler implements HttpHandler {
         @Override
         public void handle(HttpExchange ex) throws IOException {
             if (!"POST".equalsIgnoreCase(ex.getRequestMethod())) {
-                sendJson(ex, 405, "{\"error\":\"method not allowed\"}");
-                ex.close(); return;
+                sendJson(ex, 405, "{\"error\":\"method not allowed\"}"); ex.close(); return;
             }
+            if (!keyOk(ex)) { sendJson(ex, 401, "{\"error\":\"bad key\"}"); ex.close(); return; }
             String body = readBody(ex);
             if (body == null || body.trim().isEmpty()) {
-                sendJson(ex, 400, "{\"error\":\"empty body\"}");
-                ex.close(); return;
+                sendJson(ex, 400, "{\"error\":\"empty body\"}"); ex.close(); return;
             }
             synchronized (SmsServer.class) {
                 mergeIntoStore(body.trim());
@@ -111,7 +147,6 @@ public class SmsServer {
             Files.write(DATA_FILE, sb.toString().getBytes(StandardCharsets.UTF_8));
         }
 
-        /** 提取 JSON 中 messages 数组里的每个对象子串（带原始引号），保留原始文本 */
         private List<Object> parseMessages(String json) {
             List<Object> list = new ArrayList<>();
             int start = json.indexOf("[");
@@ -119,13 +154,11 @@ public class SmsServer {
             if (start < 0 || end <= start) return list;
             String arr = json.substring(start + 1, end);
             int i = 0, depth = 0, objStart = -1;
-            boolean inStr = false;
-            char esc = 0;
+            boolean inStr = false; char esc = 0;
             for (; i < arr.length(); i++) {
                 char ch = arr.charAt(i);
-                if (inStr) {
-                    if (ch == esc) inStr = false;
-                } else {
+                if (inStr) { if (ch == esc) inStr = false; }
+                else {
                     if (ch == '"') { inStr = true; esc = ch; }
                     else if (ch == '{') { if (depth == 0) objStart = i; depth++; }
                     else if (ch == '}') {
@@ -157,6 +190,7 @@ public class SmsServer {
     static class DataHandler implements HttpHandler {
         @Override
         public void handle(HttpExchange ex) throws IOException {
+            if (!tokenOk(ex)) { sendJson(ex, 401, "{\"error\":\"bad token\"}"); ex.close(); return; }
             String store = readStore();
             String q = ex.getRequestURI().getQuery();
             String out = store;
@@ -176,8 +210,7 @@ public class SmsServer {
             if (start < 0 || end <= start) return json;
             String arr = json.substring(start + 1, end);
             int i = 0, depth = 0, objStart = -1;
-            boolean inStr = false;
-            char esc = 0;
+            boolean inStr = false; char esc = 0;
             for (; i < arr.length(); i++) {
                 char ch = arr.charAt(i);
                 if (inStr) { if (ch == esc) inStr = false; }
@@ -201,6 +234,48 @@ public class SmsServer {
             }
             sb.append("]}");
             return sb.toString();
+        }
+    }
+
+    // ---------- /command ----------
+    /** POST /command：网页「立即上传」写入待执行指令；GET /command：App 轮询取出指令 */
+    static class CommandHandler implements HttpHandler {
+        @Override
+        public void handle(HttpExchange ex) throws IOException {
+            String method = ex.getRequestMethod().toUpperCase();
+            if ("POST".equalsIgnoreCase(method)) {
+                if (!tokenOk(ex)) { sendJson(ex, 401, "{\"error\":\"bad token\"}"); ex.close(); return; }
+                String body = readBody(ex);
+                String action = "upload";
+                if (body != null && body.contains("\"action\"")) {
+                    int p = body.indexOf("\"action\"");
+                    int a = body.indexOf('"', p + 8);
+                    int b = body.indexOf('"', a + 1);
+                    if (a > 0 && b > a) action = body.substring(a + 1, b);
+                }
+                long seq;
+                synchronized (CMD_LOCK) {
+                    seq = CMD_SEQ.incrementAndGet();
+                    CMD_QUEUE.add("{\"seq\":" + seq + ",\"action\":\"" + action + "\",\"ts\":" + System.currentTimeMillis() + "}");
+                    System.out.println("[" + FMT.format(LocalDateTime.now()) + "] 网页下发指令: " + action);
+                }
+                sendJson(ex, 200, "{\"ok\":true,\"queued\":" + seq + "}");
+                ex.close();
+                return;
+            }
+            if ("GET".equalsIgnoreCase(method)) {
+                if (!keyOk(ex)) { sendJson(ex, 401, "{\"error\":\"bad key\"}"); ex.close(); return; }
+                String out;
+                synchronized (CMD_LOCK) {
+                    out = CMD_QUEUE.isEmpty() ? "{\"has\":false}" :
+                          "{\"has\":true,\"cmd\":" + CMD_QUEUE.remove(0) + "}";
+                }
+                sendJson(ex, 200, out);
+                ex.close();
+                return;
+            }
+            sendJson(ex, 405, "{\"error\":\"method not allowed\"}");
+            ex.close();
         }
     }
 

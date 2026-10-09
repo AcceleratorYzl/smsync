@@ -27,8 +27,8 @@
         android:id="@+id/etServer"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:hint="例如 http://192.168.1.100:8080"
-        android:text="http://192.168.1.100:8080"
+        android:hint="例如 http://192.168.1.26:8080"
+        android:text="http://192.168.1.26:8080"
         android:inputType="textUri"
         android:layout_marginTop="4dp"
         android:layout_marginBottom="16dp"/>
@@ -46,6 +46,14 @@
         android:layout_height="wrap_content"
         android:text="@string/btn_sync"
         android:backgroundTint="@color/primary"
+        android:layout_marginBottom="10dp"/>
+
+    <Button
+        android:id="@+id/btnService"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="@string/btn_service"
+        android:backgroundTint="@color/accent"
         android:layout_marginBottom="16dp"/>
 
     <TextView

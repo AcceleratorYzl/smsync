@@ -11,6 +11,18 @@
   .wrap { max-width: 960px; margin: 0 auto; padding: 24px 16px; }
   h1 { font-size: 22px; margin-bottom: 4px; }
   .sub { color: #777; font-size: 13px; margin-bottom: 16px; }
+
+  /* 登录框 */
+  .login { display: none; background:#fff; border:1px solid #e3e8f0; border-radius:12px;
+           padding:24px; max-width:360px; margin:60px auto; box-shadow:0 2px 10px rgba(0,0,0,.05); }
+  .login.show { display:block; }
+  .login h2 { font-size:16px; margin-bottom:6px; }
+  .login .sub { margin-bottom:16px; }
+  .login input { width:100%; padding:10px 12px; border:1px solid #cfd8e3; border-radius:8px;
+                 font-size:14px; margin-bottom:10px; }
+  .login button { width:100%; padding:10px; border:none; border-radius:8px; background:#4f8cff;
+                  color:#fff; font-size:14px; cursor:pointer; }
+
   .toolbar { display: flex; gap: 8px; margin-bottom: 16px; flex-wrap: wrap; }
   .toolbar input { flex: 1; min-width: 220px; padding: 9px 12px; border: 1px solid #cfd8e3;
                    border-radius: 8px; font-size: 14px; }
@@ -18,6 +30,9 @@
                     color: #fff; font-size: 14px; cursor: pointer; }
   .toolbar button:hover { background: #3d78e6; }
   .toolbar button.ghost { background: #eef2f8; color: #444; }
+  .toolbar button.cmd { background: #1a7f5a; }
+  .toolbar button.cmd:hover { background: #146347; }
+
   .meta { font-size: 13px; color: #666; margin-bottom: 12px; }
   .card { background: #fff; border: 1px solid #e3e8f0; border-radius: 10px;
          padding: 14px 16px; margin-bottom: 12px; box-shadow: 0 1px 2px rgba(0,0,0,.03); }
@@ -39,18 +54,69 @@
   <h1>📩 短信查看</h1>
   <div class="sub">来自 Android App 上传的短信记录</div>
 
-  <div class="toolbar">
-    <input id="kw" type="text" placeholder="搜索：发件人 / 内容 / 号码…" onkeydown="if(event.key==='Enter')doSearch()">
-    <button onclick="doSearch()">搜索</button>
-    <button class="ghost" onclick="clearSearch()">清除</button>
-    <button class="ghost" onclick="loadData()">刷新</button>
+  <!-- 登录框 -->
+  <div class="login" id="login">
+    <h2>访问口令</h2>
+    <div class="sub">这是公网可访问页面，请输入访问口令。口令默认 <b>smsync2026</b>（可在服务器配置里改）。</div>
+    <input id="tok" type="password" placeholder="输入访问口令" onkeydown="if(event.key==='Enter')login()">
+    <button onclick="login()">进入</button>
   </div>
 
-  <div class="meta" id="meta">加载中…</div>
-  <div id="list"></div>
+  <!-- 主界面 -->
+  <div id="main" style="display:none">
+    <div class="toolbar">
+      <input id="kw" type="text" placeholder="搜索：发件人 / 内容 / 号码…" onkeydown="if(event.key==='Enter')doSearch()">
+      <button onclick="doSearch()">搜索</button>
+      <button class="ghost" onclick="clearSearch()">清除</button>
+      <button class="ghost" onclick="refresh()">刷新</button>
+      <button class="cmd" onclick="cmdUpload()">⚡ 立即上传</button>
+    </div>
+    <div class="meta" id="meta">加载中…</div>
+    <div id="list"></div>
+    <div class="sub" style="margin-top:20px">
+      提示：点「立即上传」会通知后台 App 立即读取并上传短信；App 连到 <b>perpower_5G</b> WiFi 时也会自动上传。
+      若手机未开 App 后台监听或不在 WiFi 上，指令会等待 App 下次轮询（约 5 秒内）执行。
+    </div>
+  </div>
 </div>
 
 <script>
+// 与服务器 VIEW_TOKEN 对应
+let TOKEN = localStorage.getItem('smsync_token') || '';
+
+function esc(s){return (s==null?'':String(s)).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
+function showMain(){
+  document.getElementById('login').classList.remove('show');
+  document.getElementById('main').style.display='block';
+}
+function showLogin(msg){
+  document.getElementById('main').style.display='none';
+  document.getElementById('login').classList.add('show');
+  if (msg) {
+    const d=document.getElementById('tok');
+    d.parentNode.insertBefore(Object.assign(document.createElement('div'),
+      {style:'color:#d33;font-size:12px;margin-bottom:8px',textContent:msg}), d);
+  }
+}
+function login(){
+  const v=document.getElementById('tok').value.trim();
+  if (!v) return;
+  TOKEN=v; localStorage.setItem('smsync_token', TOKEN);
+  // 试一次 /data 验证
+  fetch('/data?token='+encodeURIComponent(TOKEN))
+    .then(r=>{ if (r.status===401) throw new Error('401'); return r.json(); })
+    .then(()=>{ showMain(); refresh(); })
+    .catch(e=>{
+      TOKEN=''; localStorage.removeItem('smsync_token');
+      showLogin('口令错误或无法连接服务器');
+    });
+}
+function logout(){
+  TOKEN=''; localStorage.removeItem('smsync_token');
+  document.getElementById('kw').value='';
+  showLogin();
+}
+
 let all = [];
 function fmtTime(ms) {
   if (!ms) return '';
@@ -59,13 +125,14 @@ function fmtTime(ms) {
   return d.getFullYear()+'-'+p(d.getMonth()+1)+'-'+p(d.getDate())+' '+p(d.getHours())+':'+p(d.getMinutes())+':'+p(d.getSeconds());
 }
 function typeLabel(t) {
-  // Android 短信 type: 1=收件箱 2=已发送 3=草稿 4=已失败 5=已过期
   return {1:'收件',2:'已发',3:'草稿',4:'失败',5:'过期'}[t] || '';
 }
 function render(list) {
   const el = document.getElementById('list');
-  if (!list.length) { el.innerHTML = '<div class="empty">暂无短信记录，请在手机上运行 App 并点击「读取并上传短信」。</div>'; return; }
-  // 按时间倒序
+  if (!list.length) {
+    el.innerHTML = '<div class="empty">暂无短信记录。请确保手机 App 已授权并连到 perpower_5G WiFi，或点上方「立即上传」触发。</div>';
+    return;
+  }
   list.sort((a,b) => b.date - a.date);
   el.innerHTML = list.map(m => `
     <div class="card">
@@ -76,15 +143,36 @@ function render(list) {
       <div class="body">${esc(m.body || '(空消息)')}</div>
     </div>`).join('');
 }
-function esc(s){return (s==null?'':String(s)).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
-function doSearch(){ const kw=document.getElementById('kw').value.trim(); load(kw); }
-function clearSearch(){ document.getElementById('kw').value=''; load(''); }
-function load(kw){ kw = kw==null?'':kw; const url='/data'+(kw?('?keyword='+encodeURIComponent(kw)):'');
-  fetch(url).then(r=>r.json()).then(d=>{ all=d.messages||[]; render(all); meta('共 '+all.length+' 条'+(kw?('（搜索 "'+kw+'"）'):'')); })
-  .catch(e=>{ document.getElementById('meta').textContent='加载失败：'+e.message; }); }
-function load(){ document.getElementById('list').innerHTML='<div class="empty"><span class="spin"></span>加载中…</div>'; load(''); }
-function meta(t){ document.getElementById('meta').textContent=t; }
-load();
+function doSearch(){ const kw=document.getElementById('kw').value.trim(); fetchData(kw); }
+function clearSearch(){ document.getElementById('kw').value=''; fetchData(''); }
+function fetchData(kw){ kw=(kw==null)?'':kw;
+  const url='/data?token='+encodeURIComponent(TOKEN)+(kw?('&keyword='+encodeURIComponent(kw)):'');
+  document.getElementById('meta').textContent='加载中…';
+  fetch(url).then(r=>{ if(r.status===401){ logout(); return {messages:[]}; } return r.json(); })
+    .then(d=>{ all=d.messages||[]; render(all);
+      document.getElementById('meta').textContent='共 '+all.length+' 条'+(kw?('（搜索 "'+kw+'"）'):'');
+    })
+    .catch(e=>{ document.getElementById('meta').textContent='加载失败：'+e.message; });
+}
+function refresh(){
+  document.getElementById('list').innerHTML='<div class="empty"><span class="spin"></span>加载中…</div>';
+  fetchData('');
+}
+/** 触发 App 立即上传 */
+function cmdUpload(){
+  const metaEl=document.getElementById('meta');
+  metaEl.textContent='已发送「立即上传」指令，等待 App 响应（约 5 秒内）…';
+  fetch('/command?token='+encodeURIComponent(TOKEN), {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({action:'upload'})
+  }).then(r=>r.json()).then(d=>{
+    if (d.ok) metaEl.textContent='指令已下发（#'+(d.queued||'?')+'）。若 App 正在运行并开启监听，几秒内会上传，点「刷新」查看。';
+    else metaEl.textContent='下发失败：'+(d.error||'未知');
+  }).catch(e=>{ metaEl.textContent='下发失败：'+e.message; });
+}
+
+// 若已有缓存 token，直接进主界面
+if (TOKEN) { showMain(); refresh(); } else { showLogin(); }
 </script>
 </body>
 </html>

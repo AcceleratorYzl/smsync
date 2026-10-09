@@ -3,7 +3,9 @@
     <string name="app_name">短信同步</string>
     <string name="btn_sync">读取并上传短信</string>
     <string name="btn_perm">申请读取短信权限</string>
+    <string name="btn_service">开启/停止后台监听</string>
     <string name="status">状态：未开始</string>
     <string name="server_label">服务器地址</string>
-    <string name="server_hint">例如 http://192.168.1.100:8080</string>
+    <string name="server_hint">例如 http://192.168.1.26:8080</string>
+    <string name="hint">提示：授权后可手动「读取并上传」；或点「开启/停止后台监听」，连到 perpower_5G WiFi 或网页点「立即上传」时自动同步。后台监听需授予通知与定位权限。</string>
 </resources>

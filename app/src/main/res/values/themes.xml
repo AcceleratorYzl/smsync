@@ -1,9 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <!-- 简单主题，避免依赖 AppCompat 资源 -->
-    <style name="Theme.SmsSync" parent="android:Theme.Material.Light">
-        <item name="android:colorPrimary">@color/primary</item>
-        <item name="android:colorAccent">@color/accent</item>
+    <!-- AppCompatActivity 必须使用 AppCompat 主题，否则 onCreate 会崩溃（白屏闪退） -->
+    <style name="Theme.SmsSync" parent="Theme.AppCompat.Light">
+        <item name="colorPrimary">@color/primary</item>
+        <item name="colorAccent">@color/accent</item>
         <item name="android:windowBackground">@color/bg</item>
     </style>
 </resources>
